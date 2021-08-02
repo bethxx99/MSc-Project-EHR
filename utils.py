@@ -9,6 +9,7 @@
 ##############################################################
 
 import torch
+from torch.autograd import Variable
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import LabelEncoder
@@ -53,11 +54,6 @@ def evaluate(target, predicted):
         "false_prediction": false_prediction,
     }
 
-def CustomDataloader(dataset, collate_fn):
-    dataset_iter = iter(dataset) # dataset for one adm
-    for indices in batch_sampler: #16
-        yield collate_fn([next(dataset_iter) for _ in indices])
-
 
 def train_loop_fun1(data, indices, model, optimizer, device, scheduler=None):
     model.train()
@@ -74,7 +70,12 @@ def train_loop_fun1(data, indices, model, optimizer, device, scheduler=None):
 #        print("batch:", batch)
         batch_size = batch['len'][0].item()
         num_minibatch = (batch_size - 1)//MINI_BATCH_SIZE + 1
+
+        hx = Variable(torch.zeros(1, 1, 100)) # [num_layers*num_directions, batch, hidden]
+        cx = Variable(torch.zeros(1, 1, 100))
+
         for b in range(num_minibatch):
+            flag = True # begin of adm, reset cell state
             if b == num_minibatch - 1:
 #                minibatch = [b*MINI_BATCH_SIZE:]
 #                print(batch["ids"][b*MINI_BATCH_SIZE:])
@@ -85,6 +86,7 @@ def train_loop_fun1(data, indices, model, optimizer, device, scheduler=None):
                 lengt = batch['len'][b*MINI_BATCH_SIZE:]
 
             else:
+                flag = False
 #                minibatch = batch[b*MINI_BATCH_SIZE, (b+1)*MINI_BATCH_SIZE]
                 ids = batch["ids"][b*MINI_BATCH_SIZE:(b+1)*MINI_BATCH_SIZE] # 16
                 mask = batch["mask"][b*MINI_BATCH_SIZE:(b+1)*MINI_BATCH_SIZE]
@@ -104,9 +106,16 @@ def train_loop_fun1(data, indices, model, optimizer, device, scheduler=None):
             mask = mask.to(device, dtype=torch.long)
             token_type_ids = token_type_ids.to(device, dtype=torch.long)
             targets = targets.to(device, dtype=torch.long)
+#            print("tar:", targets.size())
 
             optimizer.zero_grad()
-            outputs = model(ids=ids, mask=mask, token_type_ids=token_type_ids)
+
+            if not flag:
+                hx = Variable(hx.detach())
+                cx = Variable(cx.detach())
+            cell_states = (hx, cx)
+
+            outputs, (hx, cx) = model(ids=ids, mask=mask, token_type_ids=token_type_ids, cell_states=cell_states)
             loss = loss_fun(outputs, targets)
             loss.backward()
             model.float()
